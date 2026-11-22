@@ -1,0 +1,166 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>MovieMate Adaptive</title>
+<style>
+:root{--bg:#f6f7f9;--panel:#fff;--ink:#1c2230;--muted:#5d6678;--line:#dde1e8;--accent:#2f5bea;--accent-ink:#fff;--good:#1b7f4b;--bad:#b3392f;--chip:#eef1f7}
+@media (prefers-color-scheme:dark){:root{--bg:#12151c;--panel:#1b202b;--ink:#e8ebf2;--muted:#9aa4b8;--line:#2d3443;--accent:#7b9bff;--accent-ink:#0d1220;--good:#4cc38a;--bad:#ff8b80;--chip:#262d3c}}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--ink);font:15px/1.45 system-ui,-apple-system,"Segoe UI",Roboto,sans-serif}
+header{display:flex;flex-wrap:wrap;gap:12px;align-items:center;justify-content:space-between;padding:14px 20px;background:var(--panel);border-bottom:1px solid var(--line)}
+h1{font-size:18px;margin:0}
+.status{font-size:13px;color:var(--muted)}
+.toolbar{display:flex;gap:8px;align-items:center;flex-wrap:wrap}
+button,select,input{font:inherit;color:var(--ink)}
+button.tool,.more>button{background:var(--chip);border:1px solid var(--line);border-radius:8px;padding:6px 12px;cursor:pointer}
+button.tool:hover,.more>button:hover{border-color:var(--accent)}
+button.tool.flash{outline:2px solid var(--accent)}
+.more{position:relative}
+.more .menu{position:absolute;right:0;top:110%;background:var(--panel);border:1px solid var(--line);border-radius:8px;min-width:150px;padding:4px;display:none;z-index:5}
+.more.open .menu{display:block}
+.more .menu button{display:block;width:100%;text-align:left;background:none;border:0;padding:7px 10px;border-radius:6px;cursor:pointer}
+.more .menu button:hover{background:var(--chip)}
+main{display:grid;grid-template-columns:minmax(0,1fr) 300px;gap:18px;padding:18px 20px;max-width:1400px;margin:0 auto}
+@media (max-width:900px){main{grid-template-columns:1fr}}
+.row{margin-bottom:18px}
+.row h2{font-size:16px;margin:0 0 8px;display:flex;gap:8px;align-items:center}
+.badge{font-size:11px;background:var(--accent);color:var(--accent-ink);border-radius:999px;padding:1px 8px}
+.cards{display:flex;gap:10px;overflow-x:auto;padding-bottom:6px}
+.card{flex:0 0 190px;background:var(--panel);border:1px solid var(--line);border-radius:10px;padding:10px;display:flex;flex-direction:column;gap:6px}
+.card .t{font-weight:600;cursor:pointer}
+.card .t:hover{color:var(--accent)}
+.card .g{font-size:12px;color:var(--muted)}
+.card .why{font-size:12px;color:var(--ink);background:var(--chip);border-radius:6px;padding:5px 7px}
+.acts{display:flex;gap:6px;flex-wrap:wrap;margin-top:auto}
+.acts button{font-size:12px;border:1px solid var(--line);background:none;border-radius:6px;padding:2px 8px;cursor:pointer}
+.acts button.on-like{border-color:var(--good);color:var(--good)}
+.acts button.on-dislike{border-color:var(--bad);color:var(--bad)}
+aside .box{background:var(--panel);border:1px solid var(--line);border-radius:10px;padding:12px;margin-bottom:14px}
+aside h3{font-size:14px;margin:0 0 8px}
+.bar{display:flex;align-items:center;gap:8px;font-size:12px;margin:3px 0}
+.bar span.n{width:78px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.bar .track{flex:1;height:8px;background:var(--chip);border-radius:4px;overflow:hidden}
+.bar .fill{height:100%;background:var(--accent)}
+.log{font-size:12px;color:var(--muted);padding-left:16px;margin:0}
+.log li{margin-bottom:5px}
+.ctrl{display:flex;gap:8px;align-items:center;flex-wrap:wrap;font-size:13px}
+.panel{background:var(--panel);border:1px solid var(--line);border-radius:10px;padding:10px;margin-bottom:14px;display:none}
+.panel.show{display:block}
+.panel input{width:100%;padding:6px 8px;border:1px solid var(--line);border-radius:6px;background:var(--bg)}
+</style>
+</head>
+<body>
+<header>
+  <div><h1>MovieMate Adaptive</h1><div class="status" id="status"></div></div>
+  <div class="toolbar" id="toolbar"></div>
+</header>
+<main>
+  <section id="rows" aria-live="polite"></section>
+  <aside>
+    <div class="box"><h3>What the interface has learned</h3><div id="interest"></div><p class="status" id="count"></p></div>
+    <div class="box"><h3>Recent adaptations</h3><ul class="log" id="log"></ul></div>
+    <div class="box"><h3>Your control</h3>
+      <div class="ctrl"><label><input type="checkbox" id="freeze"> Freeze layout</label><button class="tool" id="reset">Reset</button></div>
+      <p class="status">Freeze stops the layout from changing. Reset forgets everything learned.</p></div>
+  </aside>
+</main>
+<script>
+const $ = (id) => document.getElementById(id);
+let state = null, decade = "", shownWhy = {};
+
+async function api(path, body) {
+  const opt = body === undefined ? {} : {method: "POST", headers: {"Content-Type": "application/json"}, body: JSON.stringify(body)};
+  const r = await fetch(path, opt);
+  return r.json();
+}
+function el(tag, cls, text) { const e = document.createElement(tag); if (cls) e.className = cls; if (text !== undefined) e.textContent = text; return e; }
+
+async function load() { state = await api("/api/state" + (decade ? "?decade=" + decade : "")); render(); }
+
+async function send(ev) {
+  const res = await api("/api/event", Object.assign({decade: decade ? Number(decade) : null}, ev));
+  state = res.state; render(); return res.result;
+}
+
+function renderToolbar() {
+  const tb = $("toolbar"); tb.replaceChildren();
+  for (const a of state.toolbar.primary) {
+    const b = el("button", "tool", a.label); b.dataset.action = a.id; b.onclick = () => doAction(a.id); tb.appendChild(b);
+  }
+  const wrap = el("div", "more"); const mb = el("button", "", "More ▾"); wrap.appendChild(mb);
+  const menu = el("div", "menu");
+  for (const a of state.toolbar.more) { const b = el("button", "", a.label); b.onclick = () => { wrap.classList.remove("open"); doAction(a.id); }; menu.appendChild(b); }
+  wrap.appendChild(menu); mb.onclick = () => wrap.classList.toggle("open"); tb.appendChild(wrap);
+  const sel = el("select"); sel.setAttribute("aria-label", "Decade filter");
+  for (const [v, t] of [["", "All years"], ["1980", "1980s"], ["1990", "1990s"], ["2000", "2000s"], ["2010", "2010s"]]) { const o = el("option", "", t); o.value = v; sel.appendChild(o); }
+  sel.value = decade; sel.onchange = () => { decade = sel.value; send({kind: "action", action: "decade"}); }; tb.appendChild(sel);
+}
+
+let panel = null;
+function showPanel(title, items, searchBox) {
+  if (!panel) { panel = el("div", "panel"); $("rows").prepend(panel); }
+  panel.replaceChildren(); panel.className = "panel show";
+  panel.appendChild(el("h3", "", title));
+  if (searchBox) {
+    const inp = el("input"); inp.placeholder = "Type a title, for example: toy"; panel.appendChild(inp);
+    const out = el("div", "cards"); panel.appendChild(out);
+    inp.oninput = async () => { const r = await api("/api/search?q=" + encodeURIComponent(inp.value)); out.replaceChildren(...r.items.map(i => card(i, "Search"))); };
+    inp.focus();
+  } else {
+    const out = el("div", "cards"); out.append(...items.map(i => card(i, title))); panel.appendChild(out);
+    if (!items.length) panel.appendChild(el("p", "status", "Nothing here yet."));
+  }
+}
+
+async function doAction(id) {
+  if (id === "search") { await send({kind: "action", action: "search"}); showPanel("Search", [], true); return; }
+  if (id === "explain") { state.explain_inline = !state.explain_inline; await send({kind: "action", action: "explain"}); state.explain_inline = true; render(true); return; }
+  if (id === "decade") { $("toolbar").querySelector("select").focus(); return; }
+  const res = await send({kind: "action", action: id});
+  if (res) showPanel(id === "likes" ? "My likes" : "Surprise me", res.items);
+}
+
+function card(it, row) {
+  const c = el("div", "card");
+  const t = el("div", "t", it.title + (it.year ? " (" + it.year + ")" : "")); t.onclick = () => send({kind: "open", item: it.id, row}); c.appendChild(t);
+  c.appendChild(el("div", "g", it.genres.join(" · ")));
+  const whyBox = el("div", "why"); whyBox.hidden = true; c.appendChild(whyBox);
+  const loadWhy = async () => { const r = await api("/api/why?item=" + it.id); whyBox.textContent = r.text; whyBox.hidden = false; };
+  if (state.explain_inline) loadWhy();
+  const acts = el("div", "acts");
+  const like = el("button", it.rated === "like" ? "on-like" : "", "Like"); like.onclick = () => send({kind: "like", item: it.id, row});
+  const skip = el("button", it.rated === "dislike" ? "on-dislike" : "", "Skip"); skip.onclick = () => send({kind: "dislike", item: it.id, row});
+  const why = el("button", "", "Why?"); why.onclick = async () => { await loadWhy(); send({kind: "why", item: it.id, row}); };
+  acts.append(like, skip, why); c.appendChild(acts); return c;
+}
+
+function render() {
+  $("status").textContent = state.frozen ? "Adaptation: frozen" : "Adaptation: on · " + state.interactions + " interactions";
+  $("freeze").checked = state.frozen;
+  renderToolbar();
+  const rows = $("rows"); const keep = panel; rows.replaceChildren(); if (keep) rows.appendChild(keep);
+  for (const r of state.rows) {
+    const sec = el("div", "row"); const h = el("h2", "", r.genre); if (r.adapted) h.appendChild(el("span", "badge", "moved up for you")); sec.appendChild(h);
+    const cards = el("div", "cards"); r.items.forEach(i => cards.appendChild(card(i, r.genre))); sec.appendChild(cards); rows.appendChild(sec);
+  }
+  const box = $("interest"); box.replaceChildren();
+  for (const g of state.interest) {
+    const b = el("div", "bar"); b.appendChild(el("span", "n", g.genre));
+    const tr = el("div", "track"), f = el("div", "fill"); f.style.width = Math.round(g.p * 100) + "%"; tr.appendChild(f); b.appendChild(tr);
+    b.appendChild(el("span", "", Math.round(g.p * 100) + "%")); box.appendChild(b);
+  }
+  $("count").textContent = "Estimated chance you will engage with each genre (starts low and rises with your clicks and likes).";
+  const log = $("log"); log.replaceChildren();
+  if (!state.log.length) log.appendChild(el("li", "", "Nothing has adapted yet. Open, like, or skip a few movies."));
+  state.log.forEach(e => log.appendChild(el("li", "", e.text)));
+}
+
+$("freeze").onchange = async (e) => { state = (await api("/api/freeze", {frozen: e.target.checked})).state; render(); };
+$("reset").onclick = async () => { state = (await api("/api/reset", {})).state; decade = ""; if (panel) { panel.className = "panel"; } render(); };
+document.addEventListener("click", (e) => { if (!e.target.closest(".more")) document.querySelectorAll(".more.open").forEach(m => m.classList.remove("open")); });
+load();
+</script>
+</body>
+</html>
